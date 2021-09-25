@@ -1,13 +1,14 @@
 use axum::{
-    extract::Path,
     handler::{get, post},
     http::StatusCode,
     response::IntoResponse,
-    Json, Router,
+    AddExtensionLayer, Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
-use tracing_subscriber::FmtSubscriber;
+
+mod auth;
+mod init;
 
 #[tokio::main]
 async fn main() {
@@ -18,7 +19,11 @@ async fn main() {
     let app = Router::new()
         // `GET /` goes to `root`
         .route("/", get(root))
-        .route("/hello/:name", get(get_name));
+        // auth related control
+        // `GET /` login with cookie and session
+        .route("/login", post(auth::controller::login))
+        .route("/logout", get(auth::controller::logout))
+        .layer(AddExtensionLayer::new(init::init_session_store()));
 
     // run our app with hyper
     // `axum::Server` is a re-export of `hyper::Server`
@@ -33,8 +38,4 @@ async fn main() {
 // basic handler that responds with a static string
 async fn root() -> &'static str {
     "Hello, World!"
-}
-
-async fn get_name(Path(name): Path<String>) -> String {
-    format!("Hello {}", name)
 }
