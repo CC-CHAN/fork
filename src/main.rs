@@ -1,20 +1,16 @@
 use axum::{
     handler::{get, post},
-    http::StatusCode,
-    response::IntoResponse,
-    AddExtensionLayer, Json, Router,
+    AddExtensionLayer, Router,
 };
-use serde::{Deserialize, Serialize};
+use fork_backend::auth::{self};
+use fork_backend::init::init_appliations;
 use std::net::SocketAddr;
-
-mod auth;
-mod init;
+use tracing::info;
 
 #[tokio::main]
 async fn main() {
-    // initialize tracing
-    tracing_subscriber::fmt::init();
-
+    let app_connections = init_appliations();
+    info!("build app router");
     // build our application with a route
     let app = Router::new()
         // `GET /` goes to `root`
@@ -22,13 +18,13 @@ async fn main() {
         // auth related control
         // `GET /` login with cookie and session
         .route("/login", post(auth::controller::login))
-        .route("/logout", get(auth::controller::logout))
-        .layer(AddExtensionLayer::new(init::init_session_store()));
+        .route("/logout", post(auth::controller::logout))
+        .layer(AddExtensionLayer::new(app_connections));
 
     // run our app with hyper
     // `axum::Server` is a re-export of `hyper::Server`
     let addr = SocketAddr::from(([127, 0, 0, 1], 3030));
-    tracing::debug!("listening on {}", addr);
+    info!("listening on {}", addr);
     axum::Server::bind(&addr)
         .serve(app.into_make_service())
         .await
