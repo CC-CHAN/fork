@@ -1,7 +1,7 @@
 use dotenv::dotenv;
 use lazy_static::lazy_static;
 use serde::Deserialize;
-use std::{env, io::Bytes};
+use std::env;
 
 #[derive(Debug, Deserialize)]
 pub struct LogConfig {
@@ -12,6 +12,7 @@ pub struct LogConfig {
 #[derive(Debug, Deserialize)]
 pub struct SessionConfig {
     pub url: String,
+    pub key: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -50,6 +51,7 @@ pub fn init_config() -> Config {
         },
         session: SessionConfig {
             url: env::var("SESSION_REDIS_URL").expect("SESSION_REDIS_URL must be set"),
+            key: env::var("SESSION_KEY").expect("SESSION_KEY must be set"),
         },
         auth: AuthConfig {
             salt: env::var("AUTH_SALT").expect("AUTH_SALT must be set"),

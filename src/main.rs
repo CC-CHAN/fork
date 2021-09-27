@@ -2,7 +2,7 @@ use axum::{
     handler::{get, post},
     AddExtensionLayer, Router,
 };
-use fork_backend::auth::{self};
+use fork_backend::auth::{self, session::UserSession};
 use fork_backend::init::init_appliations;
 use std::net::SocketAddr;
 use tracing::info;

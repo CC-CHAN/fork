@@ -2,11 +2,13 @@ use crate::config::CONFIG;
 use crate::init::AppConnections;
 use crate::{model::User, schema::user::dsl::*};
 use async_session::{async_trait, Session, SessionStore};
+use axum::http::HeaderMap;
 use axum::{
     extract::{Extension, FromRequest},
     http::{self, StatusCode},
     BoxError, Json,
 };
+use cookie::Cookie;
 use diesel::prelude::*;
 use diesel::{QueryDsl, RunQueryDsl};
 use serde::{Deserialize, Serialize};
@@ -14,14 +16,14 @@ use tracing::debug;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UserSessionBody {
-    user_id: i32,
-    username: String,
+    pub user_id: i32,
+    pub username: String,
 }
 
 #[derive(Debug)]
 pub enum UserSession {
     CreateNewSession {
-        cookie: String,
+        cookie: Cookie<'static>,
         body: UserSessionBody,
     },
     GetSession(UserSessionBody),
@@ -31,6 +33,13 @@ pub enum UserSession {
 struct LoginPayload {
     username: String,
     password: String,
+}
+
+pub fn get_cookie_from_header(header: &HeaderMap) -> Option<Cookie<'_>> {
+    header
+        .get(http::header::COOKIE)
+        .and_then(|x| x.to_str().ok())
+        .map(|x| Cookie::parse(x).unwrap())
 }
 
 async fn create_session(
@@ -51,8 +60,6 @@ async fn create_session(
     )
     .expect("invalid password");
 
-    debug!("password: {}", hashed_password);
-
     let is_valid = argon2::verify_encoded(&hashed_password, auth_user.password.as_bytes())
         .expect("invalid password");
 
@@ -66,7 +73,9 @@ async fn create_session(
     };
     debug!("create new sesion for user: {:?}", session_body);
     let mut session = Session::new();
-    session.insert("body", session_body.clone()).unwrap();
+    session
+        .insert(CONFIG.session.key.as_str(), session_body.clone())
+        .unwrap();
 
     Ok((session, session_body))
 }
@@ -87,15 +96,12 @@ where
             .await
             .expect("AppConnections not found");
 
-        let headers = req.headers().expect("headers not found");
+        let header = req.headers().expect("headers not found");
 
-        let cookie = if let Some(cookie) = headers
-            .get(http::header::COOKIE)
-            .and_then(|x| x.to_str().ok())
-            .map(|x| x.to_string())
-        {
-            cookie
+        let cookie = if let Some(cookie) = get_cookie_from_header(header) {
+            cookie.to_owned()
         } else {
+            debug!("cookie not found, create new session base on username and password");
             let login_payload = Json::<LoginPayload>::from_request(req).await;
 
             if login_payload.is_err() {
@@ -105,42 +111,37 @@ where
             let (session, body) = create_session(&app_connections, login_payload.unwrap())
                 .await
                 .unwrap();
-            let cookie = app_connections
+            let cookie_value = app_connections
                 .session_store
                 .store_session(session)
                 .await
                 .unwrap()
                 .unwrap();
+            let cookie = Cookie::build(CONFIG.session.key.as_str(), cookie_value)
+                .path("/")
+                // .secure(true)
+                .http_only(true)
+                .max_age(time::Duration::days(1))
+                .finish();
 
             return Ok(Self::CreateNewSession { cookie, body });
         };
         let store = app_connections.session_store;
 
-        let session = if let Some(session) = store.load_session(cookie).await.unwrap() {
+        let session = if let Some(session) = store
+            .load_session(cookie.value().to_string())
+            .await
+            .unwrap()
+        {
             session
         } else {
             return Err((StatusCode::UNAUTHORIZED, "invalid user"));
         };
 
-        let body = session.get::<UserSessionBody>("body").unwrap();
+        let body = session
+            .get::<UserSessionBody>(CONFIG.session.key.as_str())
+            .unwrap();
 
         Ok(Self::GetSession(body))
     }
 }
-
-// trait DestroySession {
-//     fn destory_session(&self, session_store: RedisSessionStore) -> Result<StatusCode, StatusCode>;
-// }
-
-// impl DestroySession for UserSession {
-//     fn destory_session(&self, session_store: RedisSessionStore) -> Result<StatusCode, StatusCode> {
-//         let session_body = if let UserSession::GetSession(body) = self {
-//             body.to_owned()
-//         } else {
-//             return Err(StatusCode::UNAUTHORIZED);
-//         };
-
-//         session_store.destroy_session(session_body);
-//         Ok(StatusCode::ACCEPTED)
-//     }
-// }

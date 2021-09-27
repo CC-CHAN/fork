@@ -1,30 +1,27 @@
-use async_redis_session::RedisSessionStore;
+use super::session::UserSession;
+use crate::auth::session::get_cookie_from_header;
+use crate::init::AppConnections;
 use async_session::SessionStore;
 use axum::{
-    extract::{Extension, FromRequest},
-    http::{self, header, HeaderMap, HeaderValue, Request, StatusCode},
+    extract::Extension,
+    http::{self, HeaderMap, HeaderValue, StatusCode},
     response::IntoResponse,
 };
-
-use crate::init::AppConnections;
-
-use super::session::UserSession;
+use tracing::info;
 
 pub async fn login(user_session: UserSession) -> impl IntoResponse {
-    let (header, _) = match user_session {
+    let (header, session_body) = match user_session {
         UserSession::GetSession(body) => (HeaderMap::new(), body),
         UserSession::CreateNewSession { body, cookie } => {
             let mut header = HeaderMap::new();
-            // more secure cookie
-            let cookie = cookie + ";secure ;httpOnly";
             header.insert(
                 http::header::SET_COOKIE,
-                HeaderValue::from_str(cookie.as_str()).unwrap(),
+                HeaderValue::from_str(cookie.to_string().as_str()).unwrap(),
             );
             (header, body)
         }
     };
-
+    info!("current user: {}", session_body.username);
     header
 }
 
@@ -34,24 +31,24 @@ pub async fn logout(
 ) -> impl IntoResponse {
     let store = app_connections.session_store;
     // get cookie
-    if let Some(cookie) = header
-        .get(http::header::COOKIE)
-        .and_then(|x| x.to_str().ok())
-    {
-        let session = store
-            .load_session(cookie.to_string())
+    if let Some(mut cookie) = get_cookie_from_header(&header) {
+        if let Some(session) = store
+            .load_session(cookie.value().to_string())
             .await
             .unwrap()
-            .unwrap();
-        if store.destroy_session(session).await.is_err() {
-            return StatusCode::SERVICE_UNAVAILABLE;
-        } else {
-            return StatusCode::ACCEPTED;
+        {
+            if store.destroy_session(session).await.is_ok() {
+                cookie.set_expires(time::OffsetDateTime::now_utc());
+
+                let mut header = HeaderMap::new();
+                header.insert(
+                    http::header::SET_COOKIE,
+                    HeaderValue::from_str(cookie.to_string().as_str()).unwrap(),
+                );
+                return (StatusCode::OK, header);
+                // return StatusCode::ACCEPTED;
+            }
         }
     }
-    StatusCode::UNAUTHORIZED
-}
-
-async fn create_session(user_id: String) {
-    //
+    (StatusCode::UNAUTHORIZED, HeaderMap::new())
 }
